@@ -4,7 +4,6 @@ package main
 import (
 	"fmt"
 	"image"
-	"image/color"
 	"image/draw"
 	"image/gif"
 	"image/jpeg"
@@ -15,12 +14,32 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"math"
+
+	"./filters"
 )
 
 func init() {
 	image.RegisterFormat("png", "png", png.Decode, png.DecodeConfig)
 	image.RegisterFormat("jpeg", "jpeg", jpeg.Decode, jpeg.DecodeConfig)
+}
+
+func pickFilter(input string) string {
+	fmt.Println(input)
+	filter := "rand"
+	if input == "dither" {
+		fmt.Println("dithering")
+		filter = "dither"
+	} else if input == "ditherc" {
+		fmt.Println("dithering with color")
+		filter = "ditherc"
+	} else if input == "xor" {
+		fmt.Println("applying xor")
+		filter = "xor"
+	} else {
+		return filter
+	}
+
+	return filter
 }
 
 func openDecodeFilterStatic(ImageFile *os.File, timesFry int) (image.Image, string) {
@@ -40,7 +59,22 @@ func openDecodeFilterStatic(ImageFile *os.File, timesFry int) (image.Image, stri
 
 	ImageFile.Seek(0, 0)
 
-	newImg := randFilter(imageData, imgCfg, timesFry)
+	filter := pickFilter(os.Args[3])
+	fmt.Println(filter)
+
+	var newImg image.Image
+	if filter == "rand" {
+		newImg = filters.RandFilter(imageData, imgCfg, timesFry)
+	} else if filter == "dither" {
+		newImg = filters.DitherFilter(imageData, imgCfg, timesFry)
+	} else if filter == "ditherc" {
+		newImg = filters.DitherFilterColor(imageData, imgCfg, timesFry)
+	} else if filter == "xor" {
+		newImg = filters.XorFilter(imageData, imgCfg, timesFry)
+	} else {
+		fmt.Println("error, bad filter arg")
+	}
+
 	return newImg, imageType
 }
 
@@ -51,7 +85,7 @@ func main() {
 
 	if strings.HasSuffix(os.Args[1], ".gif") {
 		_, newGif := SplitAnimatedGIF(ImageFile, timesFry)
-		outputFile, err := os.Create("fryd" + os.Args[1])
+		outputFile, err := os.Create(os.Args[1])
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "perlin output error: %s\n", err)
 		}
@@ -60,10 +94,12 @@ func main() {
 	} else {
 		newImg, imageType := openDecodeFilterStatic(ImageFile, timesFry)
 
-		outputFile, err := os.Create("fryd" + os.Args[1])
+		outputFile, err := os.Create(os.Args[1])
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "perlin output error: %s\n", err)
 		}
+
+		fmt.Println(newImg)
 
 		if imageType == "png" {
 			png.Encode(outputFile, newImg)
@@ -75,13 +111,14 @@ func main() {
 		outputFile.Close()
 	}
 
-	fmt.Printf("output written to %s\n", "fryd"+os.Args[1])
+	fmt.Printf("output written to %s\n", os.Args[1])
 }
 
 func inputParseAndOpen() (*os.File, int) {
-	if len(os.Args) <= 1 {
+	if len(os.Args) <= 1 || os.Args[1] == "help" {
 		fmt.Fprint(os.Stderr, "ERROR: please provide a filename\n")
-		fmt.Println("USAGE: 'imagefry.exe image.jpg/png #times_fryd'")
+		fmt.Println("USAGE: 'imagefry.exe <image.jpg/png/gif> <#times_fryd> <filter_type>'")
+		fmt.Println("<filter_type> options are 'rand' or 'dither'")
 		os.Exit(1)
 	}
 	if strings.HasSuffix(os.Args[1], ".png") || strings.HasSuffix(os.Args[1], ".jpg") || strings.HasSuffix(os.Args[1], ".gif") {
@@ -99,7 +136,7 @@ func inputParseAndOpen() (*os.File, int) {
 				os.Exit(1)
 			}
 			return imageFile, intnumfry
-		} else if len(os.Args) > 3 {
+		} else if len(os.Args) > 4 {
 			fmt.Fprint(os.Stderr, "ERROR: too many arguments")
 			os.Exit(1)
 		} else {
@@ -116,81 +153,6 @@ func inputParseAndOpen() (*os.File, int) {
 	return nil, 0
 }
 
-func randFilter(imageData image.Image, imgCfg image.Config, timesFry int) image.Image {
-	// copy old image to a new template
-
-	alteredImage := image.NewRGBA(imageData.Bounds())
-	draw.Draw(alteredImage, imageData.Bounds(), imageData, image.Point{}, draw.Over)
-
-	width := imgCfg.Width
-	height := imgCfg.Height
-
-	// apply random changes to the image
-	for i := 0; i < timesFry; i++ {
-		for y := 0; y < height; y++ {
-			rand.Seed(time.Now().UTC().UnixNano())
-			for x := 0; x < width; x++ {
-				r, g, b, a := alteredImage.At(x, y).RGBA()
-				newColor := color.RGBA{randColor(uint8(r)), randColor(uint8(g)), randColor(uint8(b)), uint8(a)}
-				alteredImage.Set(x, y, newColor)
-			}
-		}
-	}
-	return alteredImage
-}
-
-func ditherFilter(imageData image.Image , imgCfg image.Config, timesFry int) image.Image {
-	// copy old image to a new template
-
-	alteredImage := image.NewRGBA(imageData.Bounds())
-	draw.Draw(alteredImage, imageData.Bounds(), imageData, image.Point{}, draw.Over)
-
-	width := imgCfg.Width
-	height := imgCfg.Height
-
-	// dither image
-	for i := 0; i < timesFry; i++ {
-		for y := 0; y < height; y++ {
-			for x := 0; x < width; x++ {
-
-				dither(alteredImage, x+1, y,   (float64(7) / float64(16)))
-				dither(alteredImage, x-1, y+1, (float64(3) / float64(16)))
-				dither(alteredImage, x,   y+1, (float64(5) / float64(16)))
-				dither(alteredImage, x+1, y+1, (float64(1) / float64(16)))
-			}
-		}
-	}
-
-	return alteredImage
-}
-
-func dither(image *image.RGBA, x int, y int, ratio float64) {
-	r, g, b, a := image.At(x, y).RGBA()
-	origColor := int((r + g + b) / 3)
-	newColor := findClosestColor(origColor)
-	quant_error := origColor - newColor
-	new_val := origColor + int(math.RoundToEven(float64(quant_error) * ratio))
-	newRGBAColor := color.RGBA{uint8(new_val), uint8(new_val), uint8(new_val), uint8(a)}
-	image.Set(x, y, newRGBAColor)
-}
-
-func findClosestColor(origColor int) int {
-	tmp := math.RoundToEven(float64(origColor) / float64(255))
-	if tmp == 1 {
-		return 255
-	}
-	return 0
-}
-
-func randColor(origColor uint8) uint8 {
-	key := rand.Intn(1)
-	if key == 0 {
-		return origColor + uint8(rand.Intn(10))
-	} else {
-		return origColor - uint8(rand.Intn(10))
-	}
-}
-
 // Decode reads and analyzes the given reader as a GIF image
 func SplitAnimatedGIF(reader io.Reader, timesFry int) (err error, newGif *gif.GIF) {
 	defer func() {
@@ -205,10 +167,25 @@ func SplitAnimatedGIF(reader io.Reader, timesFry int) (err error, newGif *gif.GI
 		return err, nil
 	}
 
+	filter := pickFilter(os.Args[3])
+	fmt.Println(filter)
+
 	for _, srcImg := range inGif.Image {
 		var imgCfg image.Config
 		imgCfg.Width, imgCfg.Height = srcImg.Rect.Dx(), srcImg.Rect.Dy()
-		alteredImage := ditherFilter(srcImg, imgCfg, timesFry)
+		var alteredImage image.Image
+		if filter == "rand" {
+			alteredImage = filters.RandFilter(srcImg, imgCfg, timesFry)
+		} else if filter == "dither" {
+			alteredImage = filters.DitherFilter(srcImg, imgCfg, timesFry)
+		} else if filter == "ditherc" {
+			alteredImage = filters.DitherFilterColor(srcImg, imgCfg, timesFry)
+		} else if filter == "xor" {
+			alteredImage = filters.XorFilter(srcImg, imgCfg, timesFry)
+		} else {
+			fmt.Println("error, bad filter arg")
+		}
+
 		bounds := alteredImage.Bounds()
 		alteredPalette := image.NewPaletted(bounds, srcImg.Palette)
 		draw.Draw(alteredPalette, alteredPalette.Rect, alteredImage, bounds.Min, draw.Over)
